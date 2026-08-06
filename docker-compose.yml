@@ -1,8 +1,36 @@
 services:
   vibe-trading:
     build: .
-    ports:
-      - "127.0.0.1:8899:8899"
+    # Host networking so the browser's request reaches the app as a genuine
+    # 127.0.0.1 peer. Under rootless podman the default bridge + rootlessport
+    # rewrites the source address to the container's own IP (10.89.1.2), which
+    # never matches the gateway that VIBE_TRADING_TRUST_DOCKER_LOOPBACK trusts,
+    # so every API call 403s. Sharing the host netns sidesteps the rewrite.
+    # The command override binds the listener directly, replacing the
+    # "ports: 127.0.0.1:8899:8899" mapping that host networking makes moot.
+    network_mode: host
+    # Bound to the Tailscale address only, so the API is reachable from tailnet
+    # devices but NOT from the local WiFi LAN. Requests then arrive from a
+    # 100.x.y.z peer rather than loopback, which means API_AUTH_KEY is REQUIRED
+    # in agent/.env — without it every request 403s (src/api/security.py).
+    #
+    # The until-loop waits for tailscaled to bring the address up; binding a
+    # not-yet-assigned IP fails instantly and would otherwise crash-loop.
+    #
+    # umask 002 so run dirs are created 0775 (group-writable). Combined with
+    # vibe-sandbox joining the vibe group (Dockerfile), this lets the
+    # privilege-dropped backtest subprocess write artifacts/ back into its run
+    # dir instead of dying with EACCES.
+    command:
+      - "sh"
+      - "-c"
+      - |
+        umask 002
+        until python -c "import socket; s=socket.socket(); s.bind(('100.83.63.20',0)); s.close()" 2>/dev/null; do
+          echo "waiting for tailscale0 (100.83.63.20) to come up..."
+          sleep 2
+        done
+        exec vibe-trading serve --host 100.83.63.20 --port 8899
     env_file:
       - agent/.env
     environment:
@@ -29,7 +57,10 @@ services:
       # Persist Web-UI-driven agent/.env edits (_write_env_values in
       # src/api/helpers.py writes to /app/agent/.env) across container recreation.
       # env_file above still seeds the initial boot env from the same file.
-      - ./agent/.env:/app/agent/.env
+      # ":z" relabels the file to container_file_t so it stays readable under
+      # SELinux-enforcing hosts (Fedora/RHEL/Bazzite). Without it the container
+      # cannot even stat() the file and startup preflight dies with EACCES.
+      - ./agent/.env:/app/agent/.env:z
     # --- Runtime hardening (VT-007) ---
     cap_drop:
       - ALL

@@ -90,10 +90,21 @@ COPY --from=frontend-build /app/frontend/dist frontend/dist
 # system account (no home, no shell) that runner.py drops into via
 # subprocess.run(user="vibe-sandbox") to execute LLM-generated code with the
 # least privilege — created here by fixed contract, not otherwise used.
+#
+# `vibe-sandbox` joins the `vibe` group so the dropped subprocess can still
+# write its results back into the run directory. Without this the drop succeeds
+# and the backtest then dies with EACCES writing artifacts/ (the run dir is
+# vibe:vibe 0755, and uid 10001 is "other"). The writable app-data dirs are
+# made group-writable + setgid so every run dir created underneath inherits
+# group `vibe`; the server also runs with umask 002 (see docker-compose.yml)
+# so those new dirs land 0775 rather than 0755.
 RUN useradd --create-home --shell /usr/sbin/nologin vibe \
     && useradd --system --no-create-home --shell /usr/sbin/nologin --uid 10001 vibe-sandbox \
+    && usermod -aG vibe vibe-sandbox \
     && mkdir -p agent/runs agent/sessions agent/uploads agent/.swarm/runs /home/vibe/.vibe-trading \
-    && chown -R vibe:vibe /app /home/vibe/.vibe-trading
+    && chown -R vibe:vibe /app /home/vibe/.vibe-trading \
+    && chmod -R g+w agent/runs agent/.swarm/runs \
+    && find agent/runs agent/.swarm/runs -type d -exec chmod g+s {} +
 USER vibe
 
 # Default port
