@@ -752,11 +752,17 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
         ),
         "vibe_provider": provider,
     }
-    if caps.default_headers:
-        headers = dict(caps.default_headers)
-        if caps.name in {"moonshot", "kimi-coding"}:
-            custom_ua = get_env_config().llm.moonshot_user_agent.strip()
-            if custom_ua:
-                headers["User-Agent"] = custom_ua
+    headers = dict(caps.default_headers)
+    if caps.name in {"moonshot", "kimi-coding"}:
+        custom_ua = get_env_config().llm.moonshot_user_agent.strip()
+        if custom_ua:
+            headers["User-Agent"] = custom_ua
+    # Provider-agnostic override. Some OpenAI-compatible gateways sit behind a
+    # WAF that rejects the openai SDK's default "OpenAI/Python <ver>" agent with
+    # a 403, so any provider needs a way to present a different one.
+    global_ua = get_env_config().llm.langchain_user_agent.strip()
+    if global_ua:
+        headers["User-Agent"] = global_ua
+    if headers:
         kwargs["default_headers"] = headers
     return ChatOpenAIWithReasoning(**kwargs)
